@@ -1,8 +1,14 @@
 (namespace "free")
+
 (module kadena-place-anybet GOV
-    (defcap GOV
+
+    (defcap GOV ()
         "module governance"
         (enforce-keyset "free.kadena-place-admin")
+    )
+
+    (defcap POOL-GUARD ()
+        true
     )
 
     ; Schemas
@@ -27,6 +33,7 @@
         previous-host-bet:string
         previous-hosted-bet:string
         previous-tag-bets:list
+        last-placed-bet:string
         tags:list
         name:string
         host:string
@@ -34,6 +41,7 @@
         host-fee:decimal
         left:{option}
         right:{option}
+        date-created:time
         date-opens:time
         date-closes:time
         likes:integer
@@ -54,10 +62,12 @@
         previous-user-bet:string
         previous-placed-bet:string
         previous-tag-bets:list
+        previous-hosted-bet:string
         hosted-bet:string
         left:bool
         kda-placed:decimal
         kda-locked:decimal
+        date-created:decimal
     )
 
     (defschema last-schema
@@ -191,6 +201,7 @@
                             )
                             tags
                         ),
+                        "last-placed-bet":"",
                         "tags":tags,
                         "name":name,
                         "host":host-id,
@@ -198,6 +209,7 @@
                         "host-fee":host-fee,
                         "left":{"name":left-name,"description":left-description,"color":left-color,"kda-provided":left-provided,"kda-free":left-provided,"kda-locked":0.0},
                         "right":{"name":right-name,"description":right-description,"color":right-color,"kda-provided":right-provided,"kda-free":right-provided,"kda-locked":0.0},
+                        "date-created":(at "block-time" (chain-data)),
                         "date-opens":date-opens,
                         "date-closes":date-closes,
                         "likes":0,
@@ -246,11 +258,66 @@
         )
     )
 
-    (defun place-bet)
+    (defun place-bet (hosted-bet-id:string chose-left:bool kda-placed:decimal min-kda-locked:decimal)
+        (let*
+            (
+                (user-id:string (at "sender" (chain-data)))
+                (hosted-bet-data:{hosted-bet-schema} (read hosted-bet-table hosted-bet-id))
+                (placed-bet-id:string (hash (+ hosted-bet-id user-id)))
+                (left:{option-schema} (at "left" hosted-bet-data))
+                (right:{option-schema} (at "right" hosted-bet-data))
+                (kda-locked:decimal (calculate-locked kda-placed (at "kda-free" (if chose-left left right)) (at "kda-free" (if chose-left right left)) host-fee))
+            )
+            (enforce (< 0 kda-placed) "bet amount has to be positive")
+            (enforce (<= min-kda-locked kda-locked) "could not lock the min-kda-locked amount")
+            (insert placed-bet-table placed-bet-id
+                {
+                    "previous-user-bet":(with-read user-table user-id {"last-placed":=bet-id} bet-id),
+                    "previous-placed-bet":(with-read last-table "placed-bet" {"id":=bet-id} bet-id),
+                    "previous-tag-bets":(map
+                        (lambda
+                            (tag:string)
+                            (with-read tag-table tag {"last-placed-bet":=last-placed-bet-id,"bets-placed":=bets-placed}
+                                (update tag-table tag {"last-placed-bet":placed-bet-id,"bets-placed":(+ 1 bets-placed)})
+                                last-placed-bet-id
+                            )
+                        )
+                        (at "tags" hosted-bet-data)
+                    ),
+                    "previous-hosted-bet":(at "last-placed-bet" hosted-bet-data),
+                    "hosted-bet":hosted-bet-id,
+                    "left":chose-left,
+                    "kda-placed":kda-placed,
+                    "kda-locked":kda-locked,
+                    "date-created":(at "block-time" (chain-data))
+                }
+            )
+            (update hosted-bet-table hosted-bet-id
+                (if chose-left
+                    {"last-placed-bet":placed-bet-id,"left":(+ {"kda-free":(+ (at "kda-free" left) kda-placed)} left),"right":(+ {"kda-free":(- (at "kda-free" right) kda-locked),"kda-locked":(+ (at "kda-locked" right) kda-locked)} right)}
+                    {"last-placed-bet":placed-bet-id,"right":(+ {"kda-free":(+ (at "kda-free" right) kda-placed)} right),"left":(+ {"kda-free":(- (at "kda-free" left) kda-locked),"kda-locked":(+ (at "kda-locked" left) kda-locked)} left)}
+                )
+            )
+            (with-read user-table user-id
+                {"bets-placed":=bets-placed,"kda-lost":=kda-lost}
+                (update user-table user-id
+                    {
+                        "last-placed":placed-bet-id,
+                        "bets-placed":(+ 1 bets-placed),
+                        "kda-lost":(+ kda-lost kda-placed)
+                    }
+                )
+            )
+            (update last-table "placed-bet" {"id":placed-bet-id})
+            (coin.transfer user-id kda-pool kda-placed)
+        )
+    )
 
     (defun claim-winnings)
 
     (defun review-bet)
+
+    (defun toggle-favorite)
 
     ; Local Functions
 
@@ -343,5 +410,13 @@
         (enforce (= (at 0 (str-to-list color)) "#") "Color must start with #")
         (enforce (= (length (filter (= "#") (str-to-list color))) 1) "Invalid color too many #s")
         (enforce (fold (and) true (map (lambda (x) (contains x ["#","0","1","2","3","4","5","6","7","8","9","a","b","c","d","e","f"])) (str-to-list color))) "Invalid color characters")
+    )
+
+    (defun enforce-pool-guard ()
+        (require-capability (POOL-GUARD))
+    )
+
+    (defun calculate-locked:decimal (amount:decimal chosen-free:decimal other-free:decimal host-fee:decimal)
+        (/ (* (- 1 host-fee) other-free) (+ 1 (/ chosen-free amount)))
     )
 )
