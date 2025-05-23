@@ -220,6 +220,37 @@
             )
             (update last-table "hosted-bet" {"id":bet-id})
             (update user-table host-id {"last-hosted":bet-id,"bets-hosted":(+ 1 (at "bets-hosted" host-data)),"kda-provided":(+ (+ left-provided right-provided) (at "kda-provided" host-data))})
+            (if (contains (time-line-months-id date-opens) (at "months" (read time-line-years-table (time-line-years-id date-opens))))
+                (if (contains (time-line-days-id date-opens) (at "days" (read time-line-months-table (time-line-months-id date-opens))))
+                    (if (contains (time-line-hours-id date-opens) (at "hours" (read time-line-days-table (time-line-days-id date-opens))))
+                        (if (contains (time-line-minutes-id date-opens) (at "minutes" (read time-line-hours-table (time-line-hours-id date-opens))))
+                            (update time-line-minutes-table (time-line-minutes-id date-opens) {"bets":(+ (at "bets" (read time-line-minutes-table (time-line-minutes-id date-opens))) bet-id)})
+                            [
+                                (update time-line-hours-table (time-line-hours-id date-opens) {"minutes":(+ (at "minutes" (read time-line-hours-table (time-line-hours-id date-opens))) (time-line-minutes-id date-opens))})
+                                (insert time-line-minutes-table (time-line-minutes-id date-opens) {"bets":[bet-id]})
+                            ]
+                        )
+                        [
+                            (update time-line-days-table (time-line-days-id date-opens) {"hours":(+ (at "hours" (read time-line-days-table (time-line-days-id date-opens))) (time-line-hours-id date-opens))})
+                            (insert time-line-hours-table (time-line-hours-id date-opens) {"minutes":[(time-line-minutes-id date-opens)]})
+                            (insert time-line-minutes-table (time-line-minutes-id date-opens) {"bets":[bet-id]})
+                        ]
+                    )
+                    [
+                        (update time-line-months-table (time-line-months-id date-opens) {"days":(+ (at "days" (read time-line-months-table (time-line-months-id date-opens))) (time-line-days-id date-opens))})
+                        (insert time-line-days-table (time-line-days-id date-opens) {"hours":[(time-line-hours-id date-opens)]})
+                        (insert time-line-hours-table (time-line-hours-id date-opens) {"minutes":[(time-line-minutes-id date-opens)]})
+                        (insert time-line-minutes-table (time-line-minutes-id date-opens) {"bets":[bet-id]})
+                    ]
+                )
+                [
+                    (update time-line-years-table (time-line-years-id date-opens) {"months":(+ (at "months" (read time-line-years-table (time-line-years-id date-opens))) (time-line-months-id date-opens))})
+                    (insert time-line-months-table (time-line-months-id date-opens) {"days":[(time-line-days-id date-opens)]})
+                    (insert time-line-days-table (time-line-days-id date-opens) {"hours":[(time-line-hours-id date-opens)]})
+                    (insert time-line-hours-table (time-line-hours-id date-opens) {"minutes":[(time-line-minutes-id date-opens)]})
+                    (insert time-line-minutes-table (time-line-minutes-id date-opens) {"bets":[bet-id]})
+                ]
+            )
             (coin.transfer host-id kda-pool (* (+ left-provided right-provided) (+ 1 (/ (+ 1 (length tags)) 100.0))))
         )
     )
